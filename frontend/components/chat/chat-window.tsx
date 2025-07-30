@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card } from "@/components/ui/card"
-import { Send, User, Globe } from "lucide-react"
+import { Send, User, Globe, AlertCircle, Loader2 } from "lucide-react"
 import { format } from "date-fns"
 
 const languages = [
@@ -27,14 +27,16 @@ const languages = [
 
 export default function ChatWindow() {
   const { user } = useAuth()
-  // Remove sendMessage from useChat, we'll use WebSocket directly
   const { messages: contextMessages, friends, activeChat } = useChat()
   const [newMessage, setNewMessage] = useState("")
   const [selectedLanguage, setSelectedLanguage] = useState(user?.preferredLanguage || "en")
   const [messages, setMessages] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [isConnected, setIsConnected] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const activeFriend = friends.find((f) => f.id === activeChat)
 
@@ -43,58 +45,99 @@ export default function ChatWindow() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  // Establish WebSocket connection
+  // Establish WebSocket connection with reconnection logic
   useEffect(() => {
-    if (!activeChat) return
-    setError(null)
-    // Close previous connection if any
-    if (wsRef.current) {
-      wsRef.current.close()
-    }
-    // Connect to Django Channels WebSocket
-    const ws = new WebSocket("ws://localhost:8000/ws/chat/")
-    wsRef.current = ws
+    if (!activeChat || !user) return
+    
+    const connectWebSocket = () => {
+      setIsConnecting(true)
+      setError(null)
+      
+      // Close previous connection if any
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+      
+      // Connect to Django Channels WebSocket
+      const ws = new WebSocket("ws://localhost:8000/ws/chat/")
+      wsRef.current = ws
 
-    ws.onopen = () => {
-      // Optionally notify connection
-      // setError(null)
-    }
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        // Expecting: { message, translated_message, sender_id, receiver_id, timestamp, ... }
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: data.id || Math.random().toString(36).slice(2),
-            senderId: data.sender_id,
-            receiverId: data.receiver_id,
-            content: data.message,
-            translatedContent: data.translated_message,
-            timestamp: data.timestamp || new Date().toISOString(),
-            isTranslated: !!data.translated_message,
-          },
-        ])
-      } catch (err) {
-        setError("Failed to parse incoming message.")
+      ws.onopen = () => {
+        setIsConnected(true)
+        setIsConnecting(false)
+        setError(null)
+      }
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          if (data.error) {
+            setError(data.error)
+            return
+          }
+          
+          // Expecting: { id, message, translated, sender_id, receiver_id, timestamp, ... }
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: data.id || Math.random().toString(36).slice(2),
+              senderId: data.sender_id,
+              receiverId: data.receiver_id,
+              content: data.original,
+              translatedContent: data.translated,
+              timestamp: data.timestamp || new Date().toISOString(),
+              isTranslated: !!data.translated,
+            },
+          ])
+        } catch (err) {
+          setError("Failed to parse incoming message.")
+        }
+      }
+      
+      ws.onerror = (e) => {
+        setIsConnected(false)
+        setIsConnecting(false)
+        setError("WebSocket connection error. Trying to reconnect...")
+      }
+      
+      ws.onclose = () => {
+        setIsConnected(false)
+        setIsConnecting(false)
+        
+        // Attempt to reconnect after 3 seconds
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current)
+        }
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (activeChat) {
+            connectWebSocket()
+          }
+        }, 3000)
       }
     }
-    ws.onerror = (e) => {
-      setError("WebSocket error. Please try again later.")
-    }
-    ws.onclose = () => {
-      // Optionally notify disconnect
-    }
+
+    connectWebSocket()
+
     // Clean up on unmount or chat change
     return () => {
-      ws.close()
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
     }
-  }, [activeChat])
+  }, [activeChat, user])
 
   // Send message via WebSocket
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessage.trim() || !activeChat || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    if (!newMessage.trim() || !activeChat || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setError("Cannot send message. Please check your connection.")
+      return
+    }
+    
     const payload = {
       message: newMessage,
       source_lang: user?.preferredLanguage || "en",
@@ -102,11 +145,13 @@ export default function ChatWindow() {
       sender_id: user?.id,
       receiver_id: activeChat,
     }
+    
     try {
       wsRef.current.send(JSON.stringify(payload))
       setNewMessage("")
+      setError(null)
     } catch (err) {
-      setError("Failed to send message.")
+      setError("Failed to send message. Please try again.")
     }
   }
 
@@ -157,10 +202,23 @@ export default function ChatWindow() {
           </div>
         </div>
       </div>
+      
+      {/* Connection Status */}
+      {isConnecting && (
+        <div className="p-2 bg-yellow-100 text-yellow-700 text-sm text-center flex items-center justify-center">
+          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+          Connecting...
+        </div>
+      )}
+      
       {/* Error Display */}
       {error && (
-        <div className="p-2 bg-red-100 text-red-700 text-sm text-center">{error}</div>
+        <div className="p-2 bg-red-100 text-red-700 text-sm text-center flex items-center justify-center">
+          <AlertCircle className="h-4 w-4 mr-2" />
+          {error}
+        </div>
       )}
+      
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
         {messages.map((message) => {
@@ -191,16 +249,21 @@ export default function ChatWindow() {
         })}
         <div ref={messagesEndRef} />
       </div>
+      
       {/* Message Input */}
       <div className="p-4 border-t border-gray-200 bg-white">
         <form onSubmit={handleSendMessage} className="flex space-x-2">
           <Input
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
-            placeholder="Type a message..."
+            placeholder={isConnected ? "Type a message..." : "Connecting..."}
             className="flex-1"
+            disabled={!isConnected}
           />
-          <Button type="submit" disabled={!newMessage.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN}>
+          <Button 
+            type="submit" 
+            disabled={!newMessage.trim() || !isConnected || isConnecting}
+          >
             <Send className="h-4 w-4" />
           </Button>
         </form>
@@ -208,8 +271,3 @@ export default function ChatWindow() {
     </div>
   )
 }
-// ---
-// This component now uses a native WebSocket for real-time translation chat.
-// It is compatible with Django Channels backend and Next.js best practices.
-// Comments are provided for clarity and maintainability.
-// ---
