@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card } from "@/components/ui/card"
-import { Send, User, Globe, AlertCircle, Loader2 } from "lucide-react"
+import { Send, User, Globe, AlertCircle } from "lucide-react"
 import { format } from "date-fns"
 
 const languages = [
@@ -25,20 +25,36 @@ const languages = [
   { code: "zh", name: "Chinese" },
 ]
 
+interface Message {
+  id: string
+  senderId: string | number
+  receiverId: string | number
+  content: string
+  translatedContent?: string
+  timestamp: string
+  isTranslated: boolean
+}
+
+interface Friend {
+  id: string | number
+  name: string
+  isOnline?: boolean
+}
+
 export default function ChatWindow() {
   const { user } = useAuth()
   const { messages: contextMessages, friends, activeChat } = useChat()
   const [newMessage, setNewMessage] = useState("")
   const [selectedLanguage, setSelectedLanguage] = useState(user?.preferredLanguage || "en")
-  const [messages, setMessages] = useState<any[]>([])
+  const [messages, setMessages] = useState<Message[]>([])
   const [error, setError] = useState<string | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const activeFriend = friends.find((f) => f.id === activeChat)
+  const activeFriend = friends?.find((f: Friend) => f.id === activeChat)
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -59,7 +75,8 @@ export default function ChatWindow() {
       }
       
       // Connect to Django Channels WebSocket
-      const ws = new WebSocket("ws://localhost:8000/ws/chat/")
+      const wsUrl = typeof window !== 'undefined' ? (window as any).ENV?.NEXT_PUBLIC_WS_URL || "ws://localhost:8000" : "ws://localhost:8000"
+      const ws = new WebSocket(`${wsUrl}/ws/chat/`)
       wsRef.current = ws
 
       ws.onopen = () => {
@@ -77,19 +94,18 @@ export default function ChatWindow() {
             return
           }
           
-          // Expecting: { id, message, translated, sender_id, receiver_id, timestamp, ... }
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: data.id || Math.random().toString(36).slice(2),
-              senderId: data.sender_id,
-              receiverId: data.receiver_id,
-              content: data.original,
-              translatedContent: data.translated,
-              timestamp: data.timestamp || new Date().toISOString(),
-              isTranslated: !!data.translated,
-            },
-          ])
+          // Expecting: { id, original, translated, sender_id, receiver_id, timestamp, ... }
+          const newMessage: Message = {
+            id: data.id || Math.random().toString(36).slice(2),
+            senderId: data.sender_id,
+            receiverId: data.receiver_id,
+            content: data.original,
+            translatedContent: data.translated,
+            timestamp: data.timestamp || new Date().toISOString(),
+            isTranslated: !!data.translated,
+          }
+          
+          setMessages((prev) => [...prev, newMessage])
         } catch (err) {
           setError("Failed to parse incoming message.")
         }
@@ -206,7 +222,7 @@ export default function ChatWindow() {
       {/* Connection Status */}
       {isConnecting && (
         <div className="p-2 bg-yellow-100 text-yellow-700 text-sm text-center flex items-center justify-center">
-          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-yellow-700 border-t-transparent mr-2" />
           Connecting...
         </div>
       )}
