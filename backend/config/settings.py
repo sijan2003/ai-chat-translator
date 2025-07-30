@@ -73,9 +73,9 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'backend.wsgi.application'
+WSGI_APPLICATION = 'config.wsgi.application'
 
-ASGI_APPLICATION = "backend.asgi.application"
+ASGI_APPLICATION = "config.asgi.application"
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',)
@@ -95,15 +95,15 @@ CHANNEL_LAYERS = {
 # Database
 # https://docs.djangoproject.com/en/3.2/ref/settings/#databases
 
-DB_ENGINE = config("DB_ENGINE", default='django.db.backends.postgresql')
+DB_ENGINE = config("DB_ENGINE", default='django.db.backends.sqlite3')
 DATABASES = {
     'default': {
         'ENGINE': DB_ENGINE,
-                'NAME': config("DB_NAME", default="support"),
-                'USER': config("DB_USER", default="postgres"),
-                'PASSWORD': config("DB_PASSWORD",default='password'),
-                "HOST": config("DB_HOST", default="localhost"),
-                "PORT": config("DB_PORT", cast=int, default=5432),
+        'NAME': config("DB_NAME", default=BASE_DIR / "db.sqlite3"),
+        'USER': config("DB_USER", default=""),
+        'PASSWORD': config("DB_PASSWORD", default=""),
+        "HOST": config("DB_HOST", default=""),
+        "PORT": config("DB_PORT", cast=int, default=""),
     }
 }
 

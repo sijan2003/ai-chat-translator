@@ -27,32 +27,87 @@ const languages = [
 
 export default function ChatWindow() {
   const { user } = useAuth()
-  const { messages, friends, activeChat, sendMessage } = useChat()
+  // Remove sendMessage from useChat, we'll use WebSocket directly
+  const { messages: contextMessages, friends, activeChat } = useChat()
   const [newMessage, setNewMessage] = useState("")
   const [selectedLanguage, setSelectedLanguage] = useState(user?.preferredLanguage || "en")
+  const [messages, setMessages] = useState<any[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const activeFriend = friends.find((f) => f.id === activeChat)
-  const chatMessages = messages.filter(
-    (m) =>
-      (m.senderId === user?.id && m.receiverId === activeChat) ||
-      (m.senderId === activeChat && m.receiverId === user?.id),
-  )
 
+  // Scroll to bottom when messages change
   useEffect(() => {
-    scrollToBottom()
-  }, [chatMessages])
-
-  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }
+  }, [messages])
 
+  // Establish WebSocket connection
+  useEffect(() => {
+    if (!activeChat) return
+    setError(null)
+    // Close previous connection if any
+    if (wsRef.current) {
+      wsRef.current.close()
+    }
+    // Connect to Django Channels WebSocket
+    const ws = new WebSocket("ws://localhost:8000/ws/chat/")
+    wsRef.current = ws
+
+    ws.onopen = () => {
+      // Optionally notify connection
+      // setError(null)
+    }
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        // Expecting: { message, translated_message, sender_id, receiver_id, timestamp, ... }
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: data.id || Math.random().toString(36).slice(2),
+            senderId: data.sender_id,
+            receiverId: data.receiver_id,
+            content: data.message,
+            translatedContent: data.translated_message,
+            timestamp: data.timestamp || new Date().toISOString(),
+            isTranslated: !!data.translated_message,
+          },
+        ])
+      } catch (err) {
+        setError("Failed to parse incoming message.")
+      }
+    }
+    ws.onerror = (e) => {
+      setError("WebSocket error. Please try again later.")
+    }
+    ws.onclose = () => {
+      // Optionally notify disconnect
+    }
+    // Clean up on unmount or chat change
+    return () => {
+      ws.close()
+    }
+  }, [activeChat])
+
+  // Send message via WebSocket
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessage.trim() || !activeChat) return
-
-    sendMessage(activeChat, newMessage)
-    setNewMessage("")
+    if (!newMessage.trim() || !activeChat || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    const payload = {
+      message: newMessage,
+      source_lang: user?.preferredLanguage || "en",
+      target_lang: selectedLanguage,
+      sender_id: user?.id,
+      receiver_id: activeChat,
+    }
+    try {
+      wsRef.current.send(JSON.stringify(payload))
+      setNewMessage("")
+    } catch (err) {
+      setError("Failed to send message.")
+    }
   }
 
   if (!activeFriend) {
@@ -85,7 +140,6 @@ export default function ChatWindow() {
               <p className="text-sm text-gray-500">{activeFriend.isOnline ? "Online" : "Offline"}</p>
             </div>
           </div>
-
           <div className="flex items-center space-x-2">
             <Globe className="h-4 w-4 text-gray-500" />
             <Select value={selectedLanguage} onValueChange={setSelectedLanguage}>
@@ -103,10 +157,13 @@ export default function ChatWindow() {
           </div>
         </div>
       </div>
-
+      {/* Error Display */}
+      {error && (
+        <div className="p-2 bg-red-100 text-red-700 text-sm text-center">{error}</div>
+      )}
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        {chatMessages.map((message) => {
+        {messages.map((message) => {
           const isOwn = message.senderId === user?.id
           return (
             <div key={message.id} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
@@ -134,7 +191,6 @@ export default function ChatWindow() {
         })}
         <div ref={messagesEndRef} />
       </div>
-
       {/* Message Input */}
       <div className="p-4 border-t border-gray-200 bg-white">
         <form onSubmit={handleSendMessage} className="flex space-x-2">
@@ -144,7 +200,7 @@ export default function ChatWindow() {
             placeholder="Type a message..."
             className="flex-1"
           />
-          <Button type="submit" disabled={!newMessage.trim()}>
+          <Button type="submit" disabled={!newMessage.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN}>
             <Send className="h-4 w-4" />
           </Button>
         </form>
@@ -152,3 +208,8 @@ export default function ChatWindow() {
     </div>
   )
 }
+// ---
+// This component now uses a native WebSocket for real-time translation chat.
+// It is compatible with Django Channels backend and Next.js best practices.
+// Comments are provided for clarity and maintainability.
+// ---
